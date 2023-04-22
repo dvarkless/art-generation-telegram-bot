@@ -1,0 +1,6 @@
+logger:
+
+whitelist:
+    ./info/whitelist.txt
+
+

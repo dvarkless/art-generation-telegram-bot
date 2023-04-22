@@ -1,0 +1,19 @@
+info:
+    welcome: Hi! your model is:
+    new_dialog: new_dialog
+    txt_prompt: prompt
+    img_photo: photo
+    img_prompt: prompt
+    rescale_photo: photo
+
+help:
+    txt2img: ⚪ /retry – Regenerate last bot answer
+    img2img: img2img
+    rescale: rescale
+    orientaiton: orientaiton
+
+warning:
+    long_queue: long_queue
+
+error:
+    whitelist: Ошибка. Твоего никнейма нет в моем белом списке.

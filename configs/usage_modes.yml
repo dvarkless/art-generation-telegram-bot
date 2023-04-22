@@ -1,0 +1,11 @@
+txt2img:
+  name: Картинка по описанию
+  welcome_message: 👩🏼‍🎓 Hi, I'm <b>General Assistant</b>. How can I help you?
+
+img2img:
+  name: Преобразование картинки по описанию
+  welcome_message: 👩🏼‍💻 Hi, I'm <b>Code Assistant</b>. How can I help you?
+
+rescale:
+  name: Увеличить картинку в 2 раза
+  welcome_message: 📝 Hi, I'm <b>Text Improver</b>. Send me any text – I'll improve it and correct all the mistakes

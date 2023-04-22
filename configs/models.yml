@@ -1,0 +1,71 @@
+available_models: ["stable-diffusion", "pastel-mix", "dreamlike-photoreal"]
+
+info:
+  stable-diffusion:
+    name: Фантазёр
+    checkpoint: v1-5-pruned-emaonly.safetensors
+    description: asd
+    orientation_square: 512x512
+    orientation_portrait: 640x448
+    orientation_landscape: 448x640
+    default_params:
+      negative_prompt: nude,naked,
+      sampler_name: Euler a
+      steps: 20
+      enable_hr: False
+      denoising_strength: 0.6
+      hr_scale: 2
+      hr_upscaler: Latent
+      restore_faces: False
+      cfg_scale: 8
+    img2img_params:
+      sampler_name: DDIM
+    scores:
+      Imagination: 5
+      Skill: 2
+
+  pastel-mix:
+    name: Анимешник
+    checkpoint: pastelmix-better-vae-fp16.safetensors
+    description: asd
+    orientation_square: 512x512
+    orientation_portrait: 640x448
+    orientation_landscape: 448x640
+    default_params:
+      negative_prompt: nude,naked,
+      sampler_name: DPM++ 2M Karras
+      steps: 20
+      enable_hr: False
+      denoising_strength: 0.6
+      hr_scale: 2
+      hr_upscaler: Latent
+      restore_faces: False
+      cfg_scale: 8
+    img2img_params:
+      sampler_name: DDIM
+    scores:
+      Imagination: 2
+      Skill: 5
+
+  dreamlike-photoreal:
+    name: Реалист
+    checkpoint: dreamlike-photoreal-2.0.safetensors
+    description: asd
+    orientation_square: 768x768
+    orientation_portrait: 640x896
+    orientation_landscape: 896x640
+    default_params:
+      negative_prompt: nude,naked,
+      sampler_name: Euler a
+      steps: 40
+      enable_hr: False
+      denoising_strength: 0.7
+      hr_scale: 2
+      hr_upscaler: Latent
+      restore_faces: False
+      cfg_scale: 8
+    img2img_params:
+      sampler_name: DDIM
+    scores:
+      Imagination: 4
+      Skill: 4
