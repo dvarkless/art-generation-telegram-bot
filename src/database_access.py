@@ -7,6 +7,7 @@ class Database:
         'id': 'INTEGER PRIMARY KEY',
         'action': 'VARCHAR(100)',
         'model': 'INTEGER',
+        'gen_mode': 'INTEGER',
         'prompt': 'VARCHAR(1000)',
         'orientation': 'INTEGER',
         'user': 'VARCHAR(70)',
@@ -14,7 +15,7 @@ class Database:
         'trigger_blacklist': 'INTEGER',
     }
 
-    def __init__(self, path: str):
+    def __init__(self, path: str | Path, actions_txt_path: str | Path = ''):
         path_obj = Path(path)
         self.path = path
         if not path_obj.exists():
@@ -23,7 +24,15 @@ class Database:
         self.last_action = 'txt2img'
         self.last_model = 1
         self.last_orientation = 0
+        self.last_prompt = ''
+        self.last_gen_mode = 0
         self.is_blocked = False
+        self.last_username = ''
+        self.possible_actions = []
+        if actions_txt_path != '':
+            with open(actions_txt_path, 'r') as f:
+                for line in f:
+                    self.possible_actions.append(line.strip())
 
     def __enter__(self):
         self.con = sql.connect(self.path)
@@ -50,11 +59,19 @@ class Database:
         self.con.commit()
         self.con.close()
 
-    def insert(self, action: str, model: int,
-               user: User, orientation: int,
+    def insert(self, action: str, user: User, gen_mode: int = -1,
+               model: int = -1, orientation: int = -1,
                prompt: str = '', blocked: bool = False):
-        username = user.username
-        user_id = user.id
+        if isinstance(user, int):
+            self.update_for_user(user)
+            username = self.last_username
+            user_id = user
+        else:
+            username = user.username
+            user_id = user.id
+
+        if self.possible_actions:
+            assert action in self.possible_actions
 
         query = 'INSERT INTO main ('
         questions = '('
@@ -72,6 +89,7 @@ class Database:
         args = (
             action,
             model,
+            gen_mode,
             prompt,
             orientation,
             username,
@@ -81,7 +99,11 @@ class Database:
         self.cur.execute(query, args)
 
     def update_for_user(self, user):
-        user_id = user.id
+        if isinstance(user, int):
+            user_id = user
+        else:
+            user_id = user.id
+
 
         query = f"""
             SELECT * FROM main
@@ -93,8 +115,9 @@ class Database:
         if out:
             self.last_action = out[1]
             self.last_model = out[2]
-            self.last_orientation = out[4]
-            self.is_blocked = True if out[7] > 1 else False
+            self.last_gen_mode = out[3]
+            self.last_orientation = out[5]
+            self.is_blocked = True if out[8] > 1 else False
 
     def select_all(self):
         query = "SELECT * FROM main"

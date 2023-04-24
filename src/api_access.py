@@ -30,8 +30,11 @@ class StableDiffusionAccess(metaclass=Singleton):
         self.api_url = api_url
         self.model_config_path = model_config_path
 
-    def launch_server(self):
-        pass
+    def is_connected(self):
+        r = requests.get(url=f"{self.api_url}/user")
+        if r.status_code != 200:
+            return False
+        return True
 
     def change_model(self, model_name):
         params_dict = self.get_model_params(model_name)
