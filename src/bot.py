@@ -2,13 +2,17 @@ import asyncio
 import html
 import json
 import logging
+import logging.handlers
 import traceback
-from datetime import datetime
+from io import BytesIO
 from pathlib import Path
+from typing import List
 
 import telegram
+import translators as ts
+from PIL import Image
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
-                      Update, User)
+                      InputMediaPhoto, Update, User)
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (AIORateLimiter, Application, ApplicationBuilder,
                           CallbackContext, CallbackQueryHandler,
@@ -17,20 +21,25 @@ from telegram.ext import (AIORateLimiter, Application, ApplicationBuilder,
 from api_access import StableDiffusionAccess
 from config import LoadConfig, SecretsAccess
 from database_access import Database
+from setup_handler import get_handler
+
+# ts.preaccelerate()
 
 logger = logging.getLogger(__name__)
 
+# add handler to logger
+logger.addHandler(get_handler())
 user_semaphores = {}
 user_tasks = {}
 
 
-modes_config = LoadConfig('usage_modes.yml')
-models_config = LoadConfig('models.yml')
-paths_config = LoadConfig('paths.yml')
-dialogs_config = LoadConfig('dialogs.yml')
+modes_config = LoadConfig('./configs/usage_modes.yml')
+models_config = LoadConfig('./configs/models.yml')
+dialogs_config = LoadConfig('./configs/dialogs.yml')
 secrets_config = SecretsAccess('./info')
 
 database = Database('./info/db.db')
+stable_api = StableDiffusionAccess()
 
 
 def split_text_into_chunks(text, chunk_size):
@@ -38,9 +47,35 @@ def split_text_into_chunks(text, chunk_size):
         yield text[i:i + chunk_size]
 
 
+def check_for_banned_words(text: str, banned_words: List):
+    for word in text.split():
+        if word in banned_words:
+            return True
+
+    return False
+
+
+async def translate_prompt(prompt) -> str:
+    return ts.translate_text(prompt,
+                             if_use_preacceleration=False,
+                             )
+
+
+async def register_user_if_not_exists(user_id):
+    with database as db:
+        if not db.check_user_exists(user_id):
+            db.insert('start', user_id, gen_mode=0,
+                      model=0, orientation=0)
+
+    if user_id not in user_semaphores:
+        user_semaphores[user_id] = asyncio.Semaphore(1)
+
+
 async def start_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     reply_text = dialogs_config['info']['welcome']
-    for msg in dialogs_config['help']:
+    reply_text += '\n'
+    for msg in dialogs_config['help'].values():
         reply_text += msg
         reply_text += '\n'
 
@@ -48,11 +83,13 @@ async def start_handle(update: Update, context: CallbackContext):
 
 
 async def help_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     reply_text = '\n'.join(dialogs_config['help'].values())
     await update.message.reply_text(reply_text, parse_mode=ParseMode.HTML)
 
 
 async def retry_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
 
@@ -62,7 +99,9 @@ async def retry_handle(update: Update, context: CallbackContext):
     await message_handle(update, context, message=database.last_prompt, use_new_dialog_timeout=False)
 
 
-async def message_handle1(update: Update, context: CallbackContext, message=None):
+async def message_handle(update: Update, context: CallbackContext,
+                         message=None, use_new_dialog_timeout=True):
+    await register_user_if_not_exists(update.message.from_user.id)
     # check if message is edited
     if update.edited_message is not None:
         await edited_message_handle(update, context)
@@ -70,108 +109,102 @@ async def message_handle1(update: Update, context: CallbackContext, message=None
 
     user = update.message.from_user
 
-    with database as db:
-        db.update_for_user(user)
-
     async def message_handle_fn():
-        placeholder_message = await update.message.reply_text("...")
+        with database as db:
+            db.update_for_user(user)
+            model = db.last_model
+            generation_index = db.last_gen_mode
+            orientation = db.last_orientation
 
-
-async def message_handle(update: Update, context: CallbackContext, message=None, use_new_dialog_timeout=True):
-    # check if message is edited
-    if update.edited_message is not None:
-        await edited_message_handle(update, context)
-        return
-
-    user_id = update.message.from_user.id
-
-    async def message_handle_fn():
-        # in case of CancelledError
-        n_input_tokens, n_output_tokens = 0, 0
-        current_model = db.get_user_attribute(user_id, "current_model")
+        generation_mode = modes_config['available_generations'][generation_index]
 
         try:
-            # send placeholder message to user
             placeholder_message = await update.message.reply_text("...")
 
-            # send typing action
             await update.message.chat.send_action(action="typing")
 
             _message = message or update.message.text
+            translated_msg = await translate_prompt(_message)
 
-            dialog_messages = db.get_dialog_messages(user_id, dialog_id=None)
-            parse_mode = {
-                "html": ParseMode.HTML,
-                "markdown": ParseMode.MARKDOWN
-            }[openai_utils.CHAT_MODES[chat_mode]["parse_mode"]]
+            if check_for_banned_words(translated_msg,
+                                      secrets_config.get_banwords()):
+                with database as db:
+                    db.insert(modes_config["generation"][generation_mode],
+                              user, generation_mode, model, orientation,
+                              _message, blocked=True)
 
-            chatgpt_instance = openai_utils.ChatGPT(model=current_model)
-            if config.enable_message_streaming:
-                gen = chatgpt_instance.send_message_stream(
-                    _message, dialog_messages=dialog_messages, chat_mode=chat_mode)
+                text = dialogs_config["error"]['bad_message']
+                await update.message.reply_text(text, reply_to_message_id=update.message.id,
+                                                parse_mode=ParseMode.HTML)
+                return False
+
+            model_name = models_config["available_models"][model]
+            orient_name = modes_config["available_orientations"][orientation]
+            orient_name = modes_config["orientation"][orient_name]['config_name']
+            image_size = models_config[model_name][orient_name]
+
+            if generation_mode == 'txt2txt':
+                img_paths = stable_api.txt2img(translated_msg,
+                                               model_name,
+                                               image_size,
+                                               f'gen_txt2img_{user.username}'
+                                               )
+            elif generation_mode in ('img2img', 'rescale'):
+                # Get the picture message from the user
+                if len(update.message.photo) > 1:
+                    text = dialogs_config["warning"]['too_many_pictures']
+                    await update.message.reply_text(text, reply_to_message_id=update.message.id,
+                                                    parse_mode=ParseMode.HTML)
+
+                photo = update.message.photo[-1].get_file()
+                # Read the picture data into memory
+                photo_bytes = BytesIO(photo.download_as_bytearray())
+                image = Image.open(photo_bytes)
+                img_name = f'{user.user_id}_' + \
+                    '_'.join(translated_msg.split()) + '.png'
+                img_path = Path('./temp') / img_name
+                image.save(img_path)
+
+                if generation_mode == 'img2img':
+                    img_paths = stable_api.img2img(translated_msg,
+                                                   model_name,
+                                                   image_size,
+                                                   img_path,
+                                                   f'gen_txt2img_{user.username}',
+                                                   )
+
+                else:
+                    img_paths = stable_api.upscale_img()
             else:
-                answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed = await chatgpt_instance.send_message(
-                    _message,
-                    dialog_messages=dialog_messages,
-                    chat_mode=chat_mode
-                )
+                raise KeyError(f'Bad key: {generation_mode}')
 
-                async def fake_gen():
-                    yield "finished", answer, (n_input_tokens, n_output_tokens), n_first_dialog_messages_removed
+            with database as db:
+                db.insert(generation_mode,
+                          user, generation_index,
+                          model, orientation,
+                          prompt=translated_msg)
 
-                gen = fake_gen()
+            media = [InputMediaPhoto(open(image_path, 'rb'))
+                     for image_path in img_paths]
 
-            prev_answer = ""
-            async for gen_item in gen:
-                status, answer, (n_input_tokens,
-                                 n_output_tokens), n_first_dialog_messages_removed = gen_item
+            # Send the message with the images
+            await update.message.reply_media_group(media)
 
-                answer = answer[:4096]  # telegram message limit
-
-                # update only when 100 new symbols are ready
-                if abs(len(answer) - len(prev_answer)) < 100 and status != "finished":
-                    continue
-
-                try:
-                    await context.bot.edit_message_text(answer, chat_id=placeholder_message.chat_id, message_id=placeholder_message.message_id, parse_mode=parse_mode)
-                except telegram.error.BadRequest as e:
-                    if str(e).startswith("Message is not modified"):
-                        continue
-                    else:
-                        await context.bot.edit_message_text(answer, chat_id=placeholder_message.chat_id, message_id=placeholder_message.message_id)
-
-                await asyncio.sleep(0.01)  # wait a bit to avoid flooding
-
-                prev_answer = answer
-
-            # update user data
-            new_dialog_message = {"user": _message,
-                                  "bot": answer, "date": datetime.now()}
-            db.set_dialog_messages(
-                user_id,
-                db.get_dialog_messages(
-                    user_id, dialog_id=None) + [new_dialog_message],
-                dialog_id=None
-            )
-
-            db.update_n_used_tokens(
-                user_id, current_model, n_input_tokens, n_output_tokens)
+            for path in img_paths:
+                Path(path).unlink()
 
         except asyncio.CancelledError:
-            # note: intermediate token updates only work when enable_message_streaming=True (config.yml)
-            db.update_n_used_tokens(
-                user_id, current_model, n_input_tokens, n_output_tokens)
-            raise
+            pass
 
         except Exception as e:
-            error_text = f"Something went wrong during completion. Reason: {e}"
+            error_text = dialogs_config["error"]['unhandled_error']
             logger.error(error_text)
             await update.message.reply_text(error_text)
             return
 
-    async with user_semaphores[user_id]:
+    async with user_semaphores[user.id]:
         task = asyncio.create_task(message_handle_fn())
-        user_tasks[user_id] = task
+        user_tasks[user.id] = task
 
         try:
             await task
@@ -180,13 +213,11 @@ async def message_handle(update: Update, context: CallbackContext, message=None,
         else:
             pass
         finally:
-            if user_id in user_tasks:
-                del user_tasks[user_id]
+            if user.id in user_tasks:
+                del user_tasks[user.id]
 
 
 async def is_previous_message_not_answered_yet(update: Update, context: CallbackContext):
-    await register_user_if_not_exists(update, context, update.message.from_user)
-
     user_id = update.message.from_user.id
     if user_semaphores[user_id].locked():
         text = dialogs_config["warning"]['wait_or_cancel']
@@ -197,6 +228,7 @@ async def is_previous_message_not_answered_yet(update: Update, context: Callback
 
 
 async def new_dialog_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
 
@@ -214,6 +246,7 @@ async def new_dialog_handle(update: Update, context: CallbackContext):
 
 
 async def cancel_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     user_id = update.message.from_user.id
 
     if user_id in user_tasks:
@@ -226,15 +259,15 @@ async def cancel_handle(update: Update, context: CallbackContext):
 
 
 async def show_generation_modes_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
 
-    user = update.message.from_user
-
     keyboard = []
-    for gen_mode, gen_mode_dict in modes_config.items():
+    for gen_mode, gen_mode_dict in modes_config['generation'].items():
         keyboard.append([InlineKeyboardButton(
-            chat_mode_dict["name"], callback_data=f"generation|{chat_mode}")])
+            gen_mode_dict["name"],
+            callback_data=f"generation|{gen_mode}")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(dialogs_config["info"]["select_generation_mode"],
@@ -242,16 +275,15 @@ async def show_generation_modes_handle(update: Update, context: CallbackContext)
 
 
 async def show_orientation_modes_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
 
-    user = update.message.from_user
-
     keyboard = []
-    for orient_mode, orient_mode_dict in modes_config.items():
+    for orient_mode, orient_mode_dict in modes_config['orientation'].items():
         keyboard.append([InlineKeyboardButton(
-            orient_mode_dict['orientaiton']["name"],
-            callback_data=f"orientation|{chat_mode}")])
+            orient_mode_dict["name"],
+            callback_data=f"orientation|{orient_mode}")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.message.reply_text(
@@ -260,6 +292,7 @@ async def show_orientation_modes_handle(update: Update, context: CallbackContext
 
 
 async def set_mode_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     user = update.callback_query.from_user
 
     query = update.callback_query
@@ -283,25 +316,26 @@ def get_settings_menu(user_id: int):
         db.insert("get_settings", user_id)
         db.update_for_user(user_id)
         current_model = db.last_model
-
-    text = models_config["info"][current_model]["name"]
+    curr_model_name = models_config["available_models"][current_model]
+    text = models_config[curr_model_name]["name"]
     text += '\n'
-    text = models_config["info"][current_model]["description"]
+    text = models_config[curr_model_name]["description"]
 
     text += "\n\n"
-    score_dict = models_config["info"][current_model]["scores"]
+    score_dict = models_config[curr_model_name]["scores"]
     for score_key, score_value in score_dict.items():
         text += "🟢" * score_value + "⚪️" * \
-            (5 - score_value) + f" – {dialogs_config['score'][score_key]}\n\n"
+            (5 - score_value) + \
+            f" – {dialogs_config['info']['scores'][score_key]}\n\n"
 
     text += "\n"
     text += dialogs_config['info']['select_model']
 
     # buttons to choose models
     buttons = []
-    for model_key in models_config["available_text_models"]:
-        title = models_config[model_key]["info"][model_key]["name"]
-        if model_key == current_model:
+    for model_key in models_config["available_models"]:
+        title = models_config[model_key]["name"]
+        if model_key == curr_model_name:
             title = "✅ " + title
 
         buttons.append(
@@ -314,6 +348,7 @@ def get_settings_menu(user_id: int):
 
 
 async def settings_handle(update: Update, context: CallbackContext):
+    await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
 
@@ -386,9 +421,10 @@ async def error_handle(update: Update, context: CallbackContext) -> None:
 
 async def post_init(application: Application):
     bot_command_list = []
-    for cmd_dict in dialogs_config["bot_commands"].values():
-        for cmd, description in cmd_dict.values():
-            bot_command_list.append(BotCommand(cmd, description))
+    for cmd_key in modes_config["bot_commands"]:
+        cmd = modes_config["bot_commands"][cmd_key]["command"]
+        description = modes_config["bot_commands"][cmd_key]["description"]
+        bot_command_list.append(BotCommand(cmd, description))
     await application.bot.set_my_commands(bot_command_list)
 
 
@@ -423,8 +459,6 @@ def run_bot() -> None:
     application.add_handler(CommandHandler(
         "retry", retry_handle, filters=user_filter))
     application.add_handler(CommandHandler(
-        "new", new_dialog_handle, filters=user_filter))
-    application.add_handler(CommandHandler(
         "cancel", cancel_handle, filters=user_filter))
 
     application.add_handler(CommandHandler(
@@ -440,6 +474,7 @@ def run_bot() -> None:
     application.add_error_handler(error_handle)
 
     # start the bot
+    print('Bot started')
     application.run_polling()
 
 
