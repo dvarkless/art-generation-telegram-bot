@@ -1,5 +1,5 @@
-temp/
-info/
+temp/*
+info/*
 
 
 # Byte-compiled / optimized / DLL files
