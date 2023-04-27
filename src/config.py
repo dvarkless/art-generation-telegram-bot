@@ -1,24 +1,42 @@
+import logging
 from pathlib import Path
 
 import yaml
 
-config_dir = Path(__file__).parent.parent.resolve() / "config"
+from setup_handler import get_handler
+
+logger = logging.getLogger(__name__)
+
+# add handler to logger
+logger.addHandler(get_handler())
 
 
 class LoadConfig:
-    def __init__(self, conf_name) -> None:
-        config_dir = Path(__file__).parent.parent.resolve() / "config"
-        self.path = config_dir / conf_name
+    def __init__(self, conf_path) -> None:
+        self.path = Path(conf_path)
+        assert self.path.exists()
         self.data = dict()
+
+        self._load_all()
 
     def _load_all(self):
         with open(self.path, 'r') as f:
             items = yaml.safe_load(f)
-
-        self.data = items
+        if not items:
+            raise FileNotFoundError(f'The requested config file \
+                                    "{self.path}" is empty')
+        self.data = items.copy()
 
     def __getitem__(self, key):
         return self.data[key]
+
+    def items(self):
+        for data_tup in self.data.items():
+            yield data_tup
+
+    def values(self):
+        for data in self.data.values():
+            yield data
 
 
 class SecretsAccess:
@@ -27,6 +45,7 @@ class SecretsAccess:
         'blacklist': 'blacklist.txt',
         'token': 'tg_token.txt',
         'ban_words': 'word_blacklist.txt',
+        'actions': 'possible_actions.txt',
     }
 
     def __init__(self, secrets_dir: str | Path = './info') -> None:
@@ -38,8 +57,7 @@ class SecretsAccess:
         for meaning, filename in self.__filenames.items():
             file_path = self.path / filename
             if not file_path.exists():
-                with open(file_path, 'w'):
-                    pass
+                file_path.touch()
                 self.warn(meaning)
 
             if meaning != 'token':
@@ -79,6 +97,9 @@ class SecretsAccess:
 
     def get_banwords(self):
         return self['ban_words']
+
+    def get_actions(self):
+        return self['actions']
 
     def warn(self, about):
         print(f'Warning: creating a new blank {about} file, \
