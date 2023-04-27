@@ -1,11 +1,20 @@
 import base64
 import io
+import logging
 from difflib import get_close_matches
 from pathlib import Path
+from typing import List
 
 import requests
 import yaml
 from PIL import Image, PngImagePlugin
+
+from setup_handler import get_handler
+
+logger = logging.getLogger(__name__)
+
+# add handler to logger
+logger.addHandler(get_handler())
 
 URL = "http://127.0.0.1:7860"
 
@@ -117,7 +126,7 @@ class StableDiffusionAccess(metaclass=Singleton):
         return self._pack_images(response, file_prefix)
 
     def img2img(self, prompt: str, model_name: str, image_size: str,
-                img_path: str, file_prefix='') -> list[Path]:
+                img_path: str | Path, file_prefix='') -> list[Path]:
         img_repr = self.get_image_repr(Path(img_path))
 
         if self.model != model_name:
@@ -136,8 +145,9 @@ class StableDiffusionAccess(metaclass=Singleton):
         response = requests.post(
             url=f'{self.api_url}/sdapi/v1/txt2img', json=payload)
         file_prefix = file_prefix + '_' + '_'.join(prompt.split()[:5])
+        Path(img_path).unlink()
 
         return self._pack_images(response, file_prefix)
 
-    def upscale_img(self):
+    def upscale_img(self) -> List[str]:
         pass
