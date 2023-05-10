@@ -1,3 +1,4 @@
+import logging
 import logging.handlers
 
 
@@ -8,7 +9,8 @@ def get_handler():
     handler.setLevel(logging.DEBUG)
 
 # create formatter
-    formatter = logging.Formatter('%(asctime)s - %(message)s')
+    formatter = logging.Formatter(
+        "%(asctime)s in %(name)s: %(levelname)s MESSAGE:'%(message)s")
 
 # add formatter to handler
     handler.setFormatter(formatter)
