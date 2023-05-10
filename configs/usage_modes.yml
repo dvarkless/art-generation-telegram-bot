@@ -1,11 +1,52 @@
-txt2img:
-  name: Картинка по описанию
-  welcome_message: 👩🏼‍🎓 Hi, I'm <b>General Assistant</b>. How can I help you?
+available_generations: ["txt2img", "img2img", "rescale"]
+available_orientations: ["square", "portrait", "landscape"]
 
-img2img:
-  name: Преобразование картинки по описанию
-  welcome_message: 👩🏼‍💻 Hi, I'm <b>Code Assistant</b>. How can I help you?
+bot_commands:
+  model:
+    command: /artist
+    description: Сменить ИИ Художника
+  orientation:
+    command: /picture_orientation
+    description: Сменить ориентацию изображений
+  retry:
+    command: /retry
+    description: Сгенерировать еще раз
+  help:
+    command: /help
+    description: Помощь
+#
+# generation:
+#   txt2img:
+#     pos: 0
+#     name: Картинка по описанию
+#     welcome_message: image_description 
+#
+#   img2img:
+#     pos: 1
+#     name: Преобразование картинки по описанию
+#     welcome_message: image_to_image
+#
+#   rescale:
+#     pos: 2
+#     name: Увеличить картинку в 2 раза
+#     welcome_message: image_rescale
+#
+orientation:
+  square:
+    pos: 0
+    name: Генерирую квадратные изображения
+    config_name: orientation_square
+    welcome_message: 👩🏼‍💻 Hi, I'm <b>Code Assistant</b>. How can I help you?
 
-rescale:
-  name: Увеличить картинку в 2 раза
-  welcome_message: 📝 Hi, I'm <b>Text Improver</b>. Send me any text – I'll improve it and correct all the mistakes
+  portrait:
+    pos: 1
+    name: Генерирую изображения портретной ориентации
+    config_name: orientation_portrait
+    welcome_message: 👩🏼‍💻 Hi, I'm <b>Code Assistant</b>. How can I help you?
+
+  landscape:
+    pos: 2
+    name: Генерирую изображения альбомной ориентации
+    config_name: orientation_landscape
+    welcome_message: 👩🏼‍💻 Hi, I'm <b>Code Assistant</b>. How can I help you?
+
