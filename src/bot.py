@@ -26,9 +26,9 @@ from setup_handler import get_handler
 # ts.preaccelerate()
 
 logger = logging.getLogger(__name__)
-
-# add handler to logger
 logger.addHandler(get_handler())
+logger.setLevel(logging.DEBUG)
+
 user_semaphores = {}
 user_tasks = {}
 
@@ -39,7 +39,7 @@ dialogs_config = LoadConfig('./configs/dialogs.yml')
 secrets_config = SecretsAccess('./info')
 
 database = Database('./info/db.db')
-stable_api = StableDiffusionAccess()
+stable_api = StableDiffusionAccess(model_config_obj=models_config)
 
 
 def split_text_into_chunks(text, chunk_size):
@@ -56,22 +56,29 @@ def check_for_banned_words(text: str, banned_words: List):
 
 
 async def translate_prompt(prompt) -> str:
-    return ts.translate_text(prompt,
-                             if_use_preacceleration=False,
-                             )
+    logger.debug('Call: translate_prompt')
+
+    tr_out = ts.translate_text(prompt,
+                               if_use_preacceleration=False,
+                               )
+    assert isinstance(tr_out, str)
+    return tr_out
 
 
 async def register_user_if_not_exists(user_id):
+    logger.debug('Call: register_user_if_not_exists')
     with database as db:
         if not db.check_user_exists(user_id):
-            db.insert('start', user_id, gen_mode=0,
+            db.insert('start', user_id,
                       model=0, orientation=0)
+            logger.info('User registered')
 
     if user_id not in user_semaphores:
         user_semaphores[user_id] = asyncio.Semaphore(1)
 
 
 async def start_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: start_handle')
     await register_user_if_not_exists(update.message.from_user.id)
     reply_text = dialogs_config['info']['welcome']
     reply_text += '\n'
@@ -83,8 +90,9 @@ async def start_handle(update: Update, context: CallbackContext):
 
 
 async def help_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: help_handle')
     await register_user_if_not_exists(update.message.from_user.id)
-    reply_text = '\n'.join(dialogs_config['help'].values())
+    reply_text = '\n\n'.join(dialogs_config['help'].values())
     await update.message.reply_text(reply_text, parse_mode=ParseMode.HTML)
 
 
@@ -96,15 +104,31 @@ async def retry_handle(update: Update, context: CallbackContext):
     user = update.message.from_user
     with database as db:
         db.update_for_user(user)
-    await message_handle(update, context, message=database.last_prompt, use_new_dialog_timeout=False)
+        last_action = db.last_action
+
+    if last_action is None:
+        pass
+    elif last_action == 'txt2img':
+        await text_message_handle(update, context,
+                                  message=database.last_prompt,
+                                  use_new_dialog_timeout=False)
+    else:
+        await photo_message_handle(update, context,
+                                   message=database.last_prompt,
+                                   use_new_dialog_timeout=False)
 
 
-async def message_handle(update: Update, context: CallbackContext,
-                         message=None, use_new_dialog_timeout=True):
-    await register_user_if_not_exists(update.message.from_user.id)
+async def text_message_handle(update: Update, context: CallbackContext,
+                              message=None, use_new_dialog_timeout=True):
+    logger.debug('Call: text_message_handle')
+
     # check if message is edited
     if update.edited_message is not None:
         await edited_message_handle(update, context)
+        return
+
+    await register_user_if_not_exists(update.message.from_user.id)
+    if await is_previous_message_not_answered_yet(update, context):
         return
 
     user = update.message.from_user
@@ -113,15 +137,12 @@ async def message_handle(update: Update, context: CallbackContext,
         with database as db:
             db.update_for_user(user)
             model = db.last_model
-            generation_index = db.last_gen_mode
             orientation = db.last_orientation
 
-        generation_mode = modes_config['available_generations'][generation_index]
-
         try:
-            placeholder_message = await update.message.reply_text("...")
+            placeholder_message = await update.message.reply_text(dialogs_config['info']['in_progress_text'])
 
-            await update.message.chat.send_action(action="typing")
+            await update.message.chat.send_action(action='upload_photo')
 
             _message = message or update.message.text
             translated_msg = await translate_prompt(_message)
@@ -129,9 +150,13 @@ async def message_handle(update: Update, context: CallbackContext,
             if check_for_banned_words(translated_msg,
                                       secrets_config.get_banwords()):
                 with database as db:
-                    db.insert(modes_config["generation"][generation_mode],
-                              user, generation_mode, model, orientation,
-                              _message, blocked=True)
+                    db.insert(generation_mode,
+                              user,
+                              gen_mode=generation_index,
+                              model=model,
+                              orientation=orientation,
+                              prompt=_message,
+                              blocked=True)
 
                 text = dialogs_config["error"]['bad_message']
                 await update.message.reply_text(text, reply_to_message_id=update.message.id,
@@ -139,49 +164,23 @@ async def message_handle(update: Update, context: CallbackContext,
                 return False
 
             model_name = models_config["available_models"][model]
+
             orient_name = modes_config["available_orientations"][orientation]
             orient_name = modes_config["orientation"][orient_name]['config_name']
+
             image_size = models_config[model_name][orient_name]
 
-            if generation_mode == 'txt2txt':
-                img_paths = stable_api.txt2img(translated_msg,
-                                               model_name,
-                                               image_size,
-                                               f'gen_txt2img_{user.username}'
-                                               )
-            elif generation_mode in ('img2img', 'rescale'):
-                # Get the picture message from the user
-                if len(update.message.photo) > 1:
-                    text = dialogs_config["warning"]['too_many_pictures']
-                    await update.message.reply_text(text, reply_to_message_id=update.message.id,
-                                                    parse_mode=ParseMode.HTML)
-
-                photo = update.message.photo[-1].get_file()
-                # Read the picture data into memory
-                photo_bytes = BytesIO(photo.download_as_bytearray())
-                image = Image.open(photo_bytes)
-                img_name = f'{user.user_id}_' + \
-                    '_'.join(translated_msg.split()) + '.png'
-                img_path = Path('./temp') / img_name
-                image.save(img_path)
-
-                if generation_mode == 'img2img':
-                    img_paths = stable_api.img2img(translated_msg,
-                                                   model_name,
-                                                   image_size,
-                                                   img_path,
-                                                   f'gen_txt2img_{user.username}',
-                                                   )
-
-                else:
-                    img_paths = stable_api.upscale_img()
-            else:
-                raise KeyError(f'Bad key: {generation_mode}')
+            img_paths = await stable_api.txt2img(translated_msg,
+                                                 model_name,
+                                                 image_size,
+                                                 f'gen_txt2img_{user.username}'
+                                                 )
 
             with database as db:
-                db.insert(generation_mode,
-                          user, generation_index,
-                          model, orientation,
+                db.insert('txt2img',
+                          user,
+                          model=model,
+                          orientation=orientation,
                           prompt=translated_msg)
 
             media = [InputMediaPhoto(open(image_path, 'rb'))
@@ -197,8 +196,135 @@ async def message_handle(update: Update, context: CallbackContext,
             pass
 
         except Exception as e:
-            error_text = dialogs_config["error"]['unhandled_error']
-            logger.error(error_text)
+            error_text = dialogs_config["error"]['generation_error']
+            trb = traceback.format_exc()
+            logger.error('error in text message handler:\n' + trb)
+            await update.message.reply_text(error_text)
+            return
+
+    async with user_semaphores[user.id]:
+        task = asyncio.create_task(message_handle_fn())
+        user_tasks[user.id] = task
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            await update.message.reply_text(dialogs_config["info"]["canceled"], parse_mode=ParseMode.HTML)
+        else:
+            pass
+        finally:
+            if user.id in user_tasks:
+                del user_tasks[user.id]
+
+
+async def photo_message_handle(update: Update, context: CallbackContext,
+                               message=None, use_new_dialog_timeout=True):
+    logger.debug('Call: photo_message_handle')
+
+    if update.edited_message is not None:
+        await edited_message_handle(update, context)
+        return
+
+    await register_user_if_not_exists(update.message.from_user.id)
+    if await is_previous_message_not_answered_yet(update, context):
+        return
+
+    user = update.message.from_user
+
+    async def message_handle_fn():
+        with database as db:
+            db.update_for_user(user)
+            model = db.last_model
+            orientation = db.last_orientation
+
+        try:
+            _message = message or update.message.text or update.message.caption
+            answer_msg = dialogs_config['info']['in_progress_img'] if _message else dialogs_config['info']['in_progress_rescale']
+            placeholder_message = await update.message.reply_text(answer_msg)
+
+            await update.message.chat.send_action(action='upload_photo')
+            if _message:
+                translated_msg = await translate_prompt(_message)
+            else:
+                translated_msg = ''
+
+            if check_for_banned_words(translated_msg,
+                                      secrets_config.get_banwords()):
+                with database as db:
+                    db.insert('img2img',
+                              user,
+                              model=model,
+                              orientation=orientation,
+                              prompt=_message,
+                              blocked=True)
+
+                text = dialogs_config["error"]['bad_message']
+                await update.message.reply_text(text, reply_to_message_id=update.message.id,
+                                                parse_mode=ParseMode.HTML)
+                return False
+
+            model_name = models_config["available_models"][model]
+
+            orient_name = modes_config["available_orientations"][orientation]
+            orient_name = modes_config["orientation"][orient_name]['config_name']
+
+            image_size = models_config[model_name][orient_name]
+            # Get the picture message from the user
+            # if len(update.message.photo) > 1:
+            #     print(update.message.photo)
+            #     print(len(update.message.photo))
+            #     text = dialogs_config["warning"]['too_many_pictures']
+            #     await update.message.reply_text(text, reply_to_message_id=update.message.id,
+            #                                     parse_mode=ParseMode.HTML)
+
+            img_name = f'{user.id}_' + \
+                '_'.join(translated_msg.split()) + '.png'
+            img_path = Path('./temp') / img_name
+            photo = await update.message.photo[-1].get_file()
+            await photo.download_to_drive(img_path)
+
+            if translated_msg:
+                action = 'img2img'
+                img_paths = await stable_api.img2img(translated_msg,
+                                                     model_name,
+                                                     image_size,
+                                                     img_path,
+                                                     f'gen_txt2img_{user.username}',
+                                                     )
+
+            else:
+                action = 'rescale'
+                text = dialogs_config['error']['bad_action']
+                await update.message.reply_text(text, reply_to_message_id=update.message.id,
+                                                parse_mode=ParseMode.HTML)
+                raise asyncio.CancelledError()
+                img_paths = await stable_api.upscale_img()
+
+            with database as db:
+                prompt = translated_msg if translated_msg else ''
+                db.insert(action,
+                          user,
+                          model=model,
+                          orientation=orientation,
+                          prompt=prompt
+                          )
+
+            media = [InputMediaPhoto(open(image_path, 'rb'))
+                     for image_path in img_paths]
+
+            # Send the message with the images
+            await update.message.reply_media_group(media)
+
+            for path in Path('./temp/').iterdir():
+                path.unlink(missing_ok=True)
+
+        except asyncio.CancelledError:
+            pass
+
+        except Exception as e:
+            error_text = dialogs_config["error"]['generation_error']
+            trb = traceback.format_exc()
+            logger.error('error in photo message handler:\n' + trb)
             await update.message.reply_text(error_text)
             return
 
@@ -218,6 +344,7 @@ async def message_handle(update: Update, context: CallbackContext,
 
 
 async def is_previous_message_not_answered_yet(update: Update, context: CallbackContext):
+    logger.debug('Call: is_previous_message_not_answered_yet')
     user_id = update.message.from_user.id
     if user_semaphores[user_id].locked():
         text = dialogs_config["warning"]['wait_or_cancel']
@@ -228,6 +355,7 @@ async def is_previous_message_not_answered_yet(update: Update, context: Callback
 
 
 async def new_dialog_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: new_dialog_handle')
     await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
@@ -235,7 +363,7 @@ async def new_dialog_handle(update: Update, context: CallbackContext):
     user = update.message.from_user
 
     with database as db:
-        db.insert('start', user, 0, 0, 0, '')
+        db.insert('start', user, 0, 0, '')
         db.update_for_user(user)
         gen_mode = db.last_gen_mode
     await update.message.reply_text(dialogs_config["info"]["new_dialog"])
@@ -246,6 +374,7 @@ async def new_dialog_handle(update: Update, context: CallbackContext):
 
 
 async def cancel_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: cancel_handle')
     await register_user_if_not_exists(update.message.from_user.id)
     user_id = update.message.from_user.id
 
@@ -258,23 +387,8 @@ async def cancel_handle(update: Update, context: CallbackContext):
             parse_mode=ParseMode.HTML)
 
 
-async def show_generation_modes_handle(update: Update, context: CallbackContext):
-    await register_user_if_not_exists(update.message.from_user.id)
-    if await is_previous_message_not_answered_yet(update, context):
-        return
-
-    keyboard = []
-    for gen_mode, gen_mode_dict in modes_config['generation'].items():
-        keyboard.append([InlineKeyboardButton(
-            gen_mode_dict["name"],
-            callback_data=f"generation|{gen_mode}")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(dialogs_config["info"]["select_generation_mode"],
-                                    reply_markup=reply_markup)
-
-
 async def show_orientation_modes_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: show_orientation_modes_handle')
     await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
@@ -292,34 +406,32 @@ async def show_orientation_modes_handle(update: Update, context: CallbackContext
 
 
 async def set_mode_handle(update: Update, context: CallbackContext):
-    await register_user_if_not_exists(update.message.from_user.id)
+    logger.debug('Call: set_mode_handle')
     user = update.callback_query.from_user
 
     query = update.callback_query
     await query.answer()
     mode_name, mode_to_change = query.data.split('|')
-    print(query.data.split('|'))
     with database as db:
-        if mode_name == 'generation':
+        if mode_name == 'orientation':
             db.insert(f"change_{mode_name}_mode", user,
-                      modes_config[mode_to_change]['pos'])
-        elif mode_name == 'orientation':
-            db.insert(f"change_{mode_name}_mode", user, -
-                      1, -1, modes_config[mode_to_change]['pos'])
+                      orientation=modes_config[mode_name][mode_to_change]['pos'])
 
-    await query.edit_message_text(f"{modes_config[mode_to_change]['name']}",
-                                  parse_mode=ParseMode.HTML)
+    await query.edit_message_text(
+        f"{modes_config[mode_name][mode_to_change]['name']}",
+        parse_mode=ParseMode.HTML)
 
 
-def get_settings_menu(user_id: int):
+def get_models_menu(user_id: int):
+    logger.debug('Call: get_models_menu')
     with database as db:
-        db.insert("get_settings", user_id)
         db.update_for_user(user_id)
         current_model = db.last_model
+        print(current_model)
     curr_model_name = models_config["available_models"][current_model]
     text = models_config[curr_model_name]["name"]
     text += '\n'
-    text = models_config[curr_model_name]["description"]
+    text += models_config[curr_model_name]["description"]
 
     text += "\n\n"
     score_dict = models_config[curr_model_name]["scores"]
@@ -340,26 +452,28 @@ def get_settings_menu(user_id: int):
 
         buttons.append(
             InlineKeyboardButton(
-                title, callback_data=f"set_settings|{model_key}")
+                title, callback_data=f"set_model|{model_key}")
         )
     reply_markup = InlineKeyboardMarkup([buttons])
 
     return text, reply_markup
 
 
-async def settings_handle(update: Update, context: CallbackContext):
+async def models_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: models_handle')
     await register_user_if_not_exists(update.message.from_user.id)
     if await is_previous_message_not_answered_yet(update, context):
         return
 
     user_id = update.message.from_user.id
 
-    text, reply_markup = get_settings_menu(user_id)
+    text, reply_markup = get_models_menu(user_id)
     await update.message.reply_text(text, reply_markup=reply_markup,
                                     parse_mode=ParseMode.HTML)
 
 
-async def set_settings_handle(update: Update, context: CallbackContext):
+async def set_models_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: set_model_handle')
     user = update.callback_query.from_user
 
     query = update.callback_query
@@ -368,9 +482,9 @@ async def set_settings_handle(update: Update, context: CallbackContext):
     _, model_key = query.data.split("|")
     model_pos = models_config[model_key]['pos']
     with database as db:
-        db.insert("set_model", user, model_pos)
+        db.insert("set_model", user, model=model_pos)
 
-    text, reply_markup = get_settings_menu(user.id)
+    text, reply_markup = get_models_menu(user.id)
     try:
         await query.edit_message_text(text, reply_markup=reply_markup,
                                       parse_mode=ParseMode.HTML)
@@ -380,6 +494,7 @@ async def set_settings_handle(update: Update, context: CallbackContext):
 
 
 async def edited_message_handle(update: Update, context: CallbackContext):
+    logger.debug('Call: edited_message_handle')
     text = dialogs_config["warning"]["message_editing"]
     await update.edited_message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -455,21 +570,26 @@ def run_bot() -> None:
         "help", help_handle, filters=user_filter))
 
     application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & user_filter, message_handle))
+        filters.TEXT & ~filters.ATTACHMENT & ~filters.COMMAND & user_filter,
+        text_message_handle))
+    application.add_handler(MessageHandler(
+        (filters.PHOTO | filters.CAPTION) & ~filters.COMMAND & user_filter,
+        photo_message_handle))
+
     application.add_handler(CommandHandler(
         "retry", retry_handle, filters=user_filter))
     application.add_handler(CommandHandler(
         "cancel", cancel_handle, filters=user_filter))
 
     application.add_handler(CommandHandler(
-        "model", show_generation_modes_handle, filters=user_filter))
+        "artist", models_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(
-        set_mode_handle, pattern="^set_chat_mode"))
+        set_models_handle, pattern="^set_model"))
 
     application.add_handler(CommandHandler(
-        "settings", settings_handle, filters=user_filter))
+        "picture_orientation", show_orientation_modes_handle, filters=user_filter))
     application.add_handler(CallbackQueryHandler(
-        set_settings_handle, pattern="^set_settings"))
+        set_mode_handle, pattern="^orientation"))
 
     application.add_error_handler(error_handle)
 
