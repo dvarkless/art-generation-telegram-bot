@@ -10,7 +10,6 @@ class Database:
         'id': 'INTEGER PRIMARY KEY',
         'action': 'VARCHAR(100)',
         'model': 'INTEGER',
-        'gen_mode': 'INTEGER',
         'prompt': 'VARCHAR(1000)',
         'orientation': 'INTEGER',
         'user': 'VARCHAR(70)',
@@ -19,8 +18,6 @@ class Database:
     }
     __relevant_actions = {
         'model': ['start', 'txt2img', 'img2img', 'set_model'],
-        'gen_mode': ['start', 'txt2img', 'img2img', 'rescale',
-                     'change_generation_mode'],
         'prompt': ['start', 'txt2img', 'img2img'],
         'oriention': ['start', 'txt2img', 'img2img',
                       'change_orientation_mode'],
@@ -29,11 +26,16 @@ class Database:
     def __init__(self, path: str | Path, actions_txt_path: str | Path = ''):
         path_obj = Path(path)
         self.path = path
+
+        self.logger = logging.getLogger(__name__)
+        self.logger.addHandler(get_handler())
+        self.logger.setLevel(logging.DEBUG)
+
         if not path_obj.exists():
             self.create_table()
 
         self.last_action = 'txt2img'
-        self.last_model = 1
+        self.last_model = 0
         self.last_orientation = 0
         self.last_prompt = ''
         self.last_gen_mode = 0
@@ -50,11 +52,6 @@ class Database:
             with open(actions_txt_path, 'r') as f:
                 for line in f:
                     self.possible_actions.append(line.strip())
-
-        self.logger = logging.getLogger(__name__)
-
-# add handler to logger
-        self.logger.addHandler(get_handler())
 
     def __enter__(self):
         self.con = sql.connect(self.path)
@@ -82,7 +79,7 @@ class Database:
         self.con.close()
         self.logger.debug('Created table')
 
-    def insert(self, action: str, user, gen_mode: int = -1,
+    def insert(self, action: str, user,
                model: int = -1, orientation: int = -1,
                prompt: str = '', blocked: bool = False):
         if isinstance(user, int):
@@ -110,7 +107,6 @@ class Database:
         args = (
             action,
             model,
-            gen_mode,
             prompt,
             orientation,
             username,
@@ -118,7 +114,7 @@ class Database:
             int(blocked),
         )
         self.cur.execute(query, args)
-        self.logger.debug(self.last_query)
+        self.logger.debug(self.last_query.replace('?', '{}').format(*args))
 
     def check_user_exists(self, user):
         if isinstance(user, int):
@@ -135,6 +131,7 @@ class Database:
         return bool(out)
 
     def update_for_user(self, user, update_only=None):
+        self.logger.debug('Call: update_for_user')
         if update_only:
             assert update_only in self.__relevant_actions.keys()
         if isinstance(user, int):
@@ -159,14 +156,13 @@ class Database:
             WHERE user_id=? {additional}
             ORDER BY id DESC;
         """
-        print(query)
         self.cur.execute(query, (user_id,))
         out = self.cur.fetchone()
 
         if out:
             if not update_only:
-                _, self.last_action, self.last_model, \
-                    self.last_gen_mode, self.last_prompt, \
+                _, self.last_action, \
+                    self.last_model, self.last_prompt, \
                     self.last_orientation, _, \
                     _, self.is_blocked = out
                 self.is_blocked = True if self.is_blocked > 1 else False
@@ -179,7 +175,7 @@ class Database:
             elif update_only == 'orientation':
                 self.last_orientation = out[5]
 
-        self.logger.debug(query)
+        self.logger.debug(out)
 
     def select_all(self):
         query = "SELECT * FROM main"
