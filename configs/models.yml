@@ -1,5 +1,15 @@
 available_models: ["stable-diffusion", "pastel-mix", "dreamlike-photoreal"]
 
+upscaler:
+  upscaling_resize: 2
+  upscaler_1: ESRGAN_4x
+  upscaler_2: None
+  upscaler_2_strength: 0.5 # <= 1
+  # other_settings:
+  #   gfpgan_visibility: 0,
+  #   codeformer_visibility: 0,
+  #   codeformer_weight: 0,
+
 stable-diffusion:
   pos: 0
   name: Фантазёр

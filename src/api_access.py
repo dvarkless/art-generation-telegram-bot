@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import io
 import logging
@@ -7,7 +6,6 @@ from pathlib import Path
 from typing import List
 
 import requests
-import yaml
 from PIL import Image, PngImagePlugin
 
 from setup_handler import get_handler
@@ -62,7 +60,6 @@ class StableDiffusionAccess(metaclass=Singleton):
         self.logger.debug('Call: get_sd_models')
         response = requests.get(url=f'{self.api_url}/sdapi/v1/sd-models')
         response = response.json()
-        print(response)
         return [x['title'] for x in response]
 
     def get_model_params(self, model_name, specific='txt2img') -> dict:
@@ -90,25 +87,26 @@ class StableDiffusionAccess(metaclass=Singleton):
         }
         requests.post(url=f'{self.api_url}/sdapi/v1/options', json=options)
 
-    def _pack_images(self, response, file_prefix) -> list[Path]:
+    def _pack_images(self, response, file_prefix, single_image=False) -> list[Path]:
         r = response.json()
         paths_list = []
-        for i, img_bytes in enumerate(r['images']):
+
+        def save_img(number, img_bytes, img_info=None):
             image = Image.open(io.BytesIO(
                 base64.b64decode(img_bytes.split(",", 1)[0])))
 
-            png_payload = {
-                "image": "data:image/png;base64," + img_bytes
-            }
-            response2 = requests.post(
-                url=f'{self.api_url}/sdapi/v1/png-info', json=png_payload)
-
             pnginfo = PngImagePlugin.PngInfo()
-            pnginfo.add_text("parameters", response2.json().get("info"))
-            filename = f'{file_prefix}_txt2img_gen_{i}.png'
+            pnginfo.add_text("parameters", img_info)
+            filename = f'{file_prefix}_gen_{number}.png'
             file_path = self.temp_dir / filename
             image.save(file_path, pnginfo=pnginfo)
             paths_list.append(file_path)
+
+        if single_image:
+            save_img(0, r['image'], r['html_info'])
+        else:
+            for i, (img_bytes, img_info) in enumerate(zip(r['images'], r['info']['infotexts'])):
+                save_img(i, img_bytes, img_info)
 
         return paths_list
 
@@ -163,6 +161,36 @@ class StableDiffusionAccess(metaclass=Singleton):
 
         return self._pack_images(response, file_prefix)
 
-    async def upscale_img(self) -> List[str]:
+    async def upscale_img(self, resize_value: int,
+                          first_upscaler_name: str, second_upscaler_name: str | None, 
+                          second_upscaler_visibility: float,
+                          image_size: str, img_path: str | Path,
+                          other_settings = None, file_prefix='') -> list[Path]:
         self.logger.debug('Call: upscale_img')
-        pass
+        img_repr = self.get_image_repr(Path(img_path))
+
+        img_w, img_h = [int(s) for s in image_size.split('x')]
+        if img_w * img_h >= 1.5e6:
+            raise ValueError('Image is too large')
+
+        if second_upscaler_name is None:
+            second_upscaler_name = 'None'
+        payload = {
+          "resize_mode": 0,
+          "upscaling_resize": resize_value,
+          "upscaler_1": first_upscaler_name,
+          "upscaler_2": second_upscaler_name,
+          "extras_upscaler_2_visibility": second_upscaler_visibility,
+          "upscale_first": False,
+          "image": img_repr,
+        }
+        if isinstance(other_settings, dict):
+            payload |= other_settings
+
+        response = requests.post(
+            url=f'{self.api_url}/sdapi/v1/extra-single-image', json=payload)
+        Path(img_path).unlink()
+
+        return self._pack_images(response, file_prefix, single_image=True)
+
+

@@ -12,7 +12,7 @@ import telegram
 import translators as ts
 from PIL import Image
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup,
-                      InputMediaPhoto, Update, User)
+                      InputMediaPhoto, Update, User, InputMediaDocument)
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import (AIORateLimiter, Application, ApplicationBuilder,
                           CallbackContext, CallbackQueryHandler,
@@ -294,11 +294,28 @@ async def photo_message_handle(update: Update, context: CallbackContext,
 
             else:
                 action = 'rescale'
-                text = dialogs_config['error']['bad_action']
-                await update.message.reply_text(text, reply_to_message_id=update.message.id,
-                                                parse_mode=ParseMode.HTML)
-                raise asyncio.CancelledError()
-                img_paths = await stable_api.upscale_img()
+                # text = dialogs_config['error']['bad_action']
+                # await update.message.reply_text(text, reply_to_message_id=update.message.id,
+                #                                 parse_mode=ParseMode.HTML)
+                # raise asyncio.CancelledError()
+                upscaling_resize = models_config['upscaler']['upscaling_resize']
+                upscaler1 = models_config['upscaler']['upscaler_1']
+                upscaler2 = models_config['upscaler']['upscaler_2']
+                upscaler_2_strength = models_config['upscaler']['upscaler_2_strength']
+                if 'other_settings' in models_config.data.keys():
+                    other_settings = models_config['upscaler']['other_settings']
+                else:
+                    other_settings = None
+
+                img_paths = await stable_api.upscale_img(upscaling_resize,
+                                                         upscaler1,
+                                                         upscaler2,
+                                                         upscaler_2_strength,
+                                                         image_size,
+                                                         img_path,
+                                                         other_settings=other_settings,
+                                                         file_prefix='upscale_{user.username}',
+                                                         )
 
             with database as db:
                 prompt = translated_msg if translated_msg else ''
@@ -314,6 +331,7 @@ async def photo_message_handle(update: Update, context: CallbackContext,
 
             # Send the message with the images
             await update.message.reply_media_group(media)
+
 
             for path in Path('./temp/').iterdir():
                 path.unlink(missing_ok=True)
