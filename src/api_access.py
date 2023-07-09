@@ -105,8 +105,8 @@ class StableDiffusionAccess(metaclass=Singleton):
         if single_image:
             save_img(0, r['image'], r['html_info'])
         else:
-            for i, (img_bytes, img_info) in enumerate(zip(r['images'], r['info']['infotexts'])):
-                save_img(i, img_bytes, img_info)
+            for i, img_bytes in enumerate(r['images']):
+                save_img(i, img_bytes, r['info'])
 
         return paths_list
 

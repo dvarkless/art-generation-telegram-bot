@@ -387,7 +387,7 @@ async def new_dialog_handle(update: Update, context: CallbackContext):
     await update.message.reply_text(dialogs_config["info"]["new_dialog"])
 
     await update.message.reply_text(
-        f"{modes_config['generation'][gen_mode]['welcome_message']}",
+        f"{modes_config['generation'][gen_mode]['welcome_message']}", #############
         parse_mode=ParseMode.HTML)
 
 
@@ -412,9 +412,9 @@ async def show_orientation_modes_handle(update: Update, context: CallbackContext
         return
 
     keyboard = []
-    for orient_mode, orient_mode_dict in modes_config['orientation'].items():
+    for orient_mode in modes_config['orientation'].keys():
         keyboard.append([InlineKeyboardButton(
-            orient_mode_dict["name"],
+            dialogs_config['orientation'][orient_mode],
             callback_data=f"orientation|{orient_mode}")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -436,7 +436,7 @@ async def set_mode_handle(update: Update, context: CallbackContext):
                       orientation=modes_config[mode_name][mode_to_change]['pos'])
 
     await query.edit_message_text(
-        f"{modes_config[mode_name][mode_to_change]['name']}",
+        f"{dialogs_config[mode_name][mode_to_change]}",
         parse_mode=ParseMode.HTML)
 
 
@@ -444,14 +444,18 @@ def get_models_menu(user_id: int):
     logger.debug('Call: get_models_menu')
     with database as db:
         db.update_for_user(user_id)
-        current_model = db.last_model
-        print(current_model)
-    curr_model_name = models_config["available_models"][current_model]
-    text = models_config[curr_model_name]["name"]
-    text += '\n'
-    text += models_config[curr_model_name]["description"]
+        current_model_pos = db.last_model
+        if current_model_pos < 0:
+            current_model_pos = 0
 
+    curr_model_name = models_config['available_models'][current_model_pos]
+    model_config_name = f'model{current_model_pos}'
+
+    text = dialogs_config[model_config_name]["name"]
+    text += '\n'
+    text += dialogs_config[model_config_name]["description"]
     text += "\n\n"
+
     score_dict = models_config[curr_model_name]["scores"]
     for score_key, score_value in score_dict.items():
         text += "🟢" * score_value + "⚪️" * \
@@ -464,7 +468,8 @@ def get_models_menu(user_id: int):
     # buttons to choose models
     buttons = []
     for model_key in models_config["available_models"]:
-        title = models_config[model_key]["name"]
+        pos = models_config[model_key]['pos']
+        title = dialogs_config[f'model{pos}']["name"]
         if model_key == curr_model_name:
             title = "✅ " + title
 
@@ -518,7 +523,7 @@ async def edited_message_handle(update: Update, context: CallbackContext):
 
 
 async def error_handle(update: Update, context: CallbackContext) -> None:
-    logger.error(msg='Unhandled exeption: ',
+    logger.error(msg='Unhandled exception: ',
                  exc_info=context.error)
 
     try:
@@ -556,7 +561,7 @@ async def post_init(application: Application):
     bot_command_list = []
     for cmd_key in modes_config["bot_commands"]:
         cmd = modes_config["bot_commands"][cmd_key]["command"]
-        description = modes_config["bot_commands"][cmd_key]["description"]
+        description = dialogs_config["bot_commands"][cmd_key]
         bot_command_list.append(BotCommand(cmd, description))
     await application.bot.set_my_commands(bot_command_list)
 
