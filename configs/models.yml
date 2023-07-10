@@ -1,4 +1,4 @@
-available_models: ["stable-diffusion", "pastel-mix", "dreamlike-photoreal"]
+available_models: ["stable-diffusion", "sample-model"]
 
 upscaler:
   upscaling_resize: 2
@@ -32,15 +32,15 @@ stable-diffusion:
     creativity: 5
     skill: 2
 
-pastel-mix:
-  pos: 1
-  checkpoint: pastelmix-better-vae-fp16.safetensors
-  orientation_square: 512x512
-  orientation_portrait: 640x448
-  orientation_landscape: 448x640
+sample-model:
+  pos: 1 # N+1
+  checkpoint: pastelmix-better-vae-fp16.safetensors # Checkpoint's full label without commit hash
+  orientation_square: 512x512 # Regular square orientation for the model
+  orientation_portrait: 640x448 # Regular portrait orientation for the model
+  orientation_landscape: 448x640 # Regular landscape orientation for the model
   default_params:
-    negative_prompt: nude,naked,
-    sampler_name: DDIM
+    negative_prompt: nude,naked, # Use negative prompt as a soft filter for generated images
+    sampler_name: DDIM # This option and further you should choose like in web GUI
     steps: 20
     enable_hr: False
     denoising_strength: 0.6
@@ -48,30 +48,11 @@ pastel-mix:
     hr_upscaler: Latent
     restore_faces: False
     cfg_scale: 8
-  img2img_params:
+    # setting1: 0 # and so on...
+  img2img_params: # Use different params for img2img. You can add other setting too
     sampler_name: DDIM
-  scores:
+  scores: # Just decorative numbers
     creativity: 1
     skill: 5
 
-dreamlike-photoreal:
-  pos: 2
-  checkpoint: dreamlike-photoreal-2.0.safetensors
-  orientation_square: 768x768
-  orientation_portrait: 640x896
-  orientation_landscape: 896x640
-  default_params:
-    negative_prompt: nude,naked,
-    sampler_name: DDIM
-    steps: 30
-    enable_hr: False
-    denoising_strength: 0.55
-    hr_scale: 2
-    hr_upscaler: Latent
-    restore_faces: True
-    cfg_scale: 8
-  img2img_params:
-    sampler_name: DDIM
-  scores:
-    creativity: 3
-    skill: 4
+# Add other models here: (put their weights into ./stable-diffusion-webui/models/Stable-diffusion/your-model.safetensors)
