@@ -28,7 +28,7 @@ warning:
 
 error:
   bad_action: This option is not implemented yet
-  whitelist: Error. You are not in the whitelist
+  restricted_access: Error. You are not allowed to use this bot
   bad_message: This message type is unsupported
   generation_error: Error during image generation
   unhandled_error: Unhandled error

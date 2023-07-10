@@ -1,4 +1,5 @@
 import asyncio
+import argparse
 import html
 import json
 import logging
@@ -31,7 +32,6 @@ logger.setLevel(logging.DEBUG)
 
 user_semaphores = {}
 user_tasks = {}
-
 
 modes_config = LoadConfig('./configs/usage_modes.yml')
 models_config = LoadConfig('./configs/models.yml')
@@ -522,10 +522,14 @@ async def edited_message_handle(update: Update, context: CallbackContext):
     await update.edited_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+async def restricted_user_handle(update: Update, context: CallbackContext) -> None:
+    logger.warning(msg=f'Restricted user: {update.effective_user.username}')
+    await context.bot.send_message(update.effective_chat.id,
+                                   dialogs_config['error']['restricted_access'])
+
 async def error_handle(update: Update, context: CallbackContext) -> None:
     logger.error(msg='Unhandled exception: ',
                  exc_info=context.error)
-
     try:
         # collect error message
         tb_list = traceback.format_exception(
@@ -565,8 +569,32 @@ async def post_init(application: Application):
         bot_command_list.append(BotCommand(cmd, description))
     await application.bot.set_my_commands(bot_command_list)
 
+def start_bot():
+    parser = argparse.ArgumentParser()
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--blacklist', 
+                        action='store_true',
+                        help='Use blacklist as a user filter. Ignores config')
+    group.add_argument('--whitelist', 
+                        action='store_true',
+                        help='Use whitelist as a user filter. Ignores config')
+    args = parser.parse_args()
 
-def run_bot() -> None:
+    try:
+        user_filter = modes_config['bot_settings']['user_filter']
+    except KeyError:
+        user_filter = None
+
+    if args.blacklist == True:
+        user_filter = False
+    if args.whitelist == True:
+        user_filter = True
+
+    is_whitelist = True if user_filter in ('whitelist', True) else False
+    run_bot(whitelist_filter=is_whitelist)
+
+
+def run_bot(whitelist_filter=True) -> None:
     application = (
         ApplicationBuilder()
         .token(secrets_config.get_token())
@@ -578,14 +606,25 @@ def run_bot() -> None:
 
     # add handlers
     user_filter = filters.ALL
-    allowed_users = secrets_config.get_whitelist()
-    if len(allowed_users) > 0:
-        usernames = [
-            x for x in allowed_users if isinstance(x, str)]
-        user_ids = [
-            x for x in allowed_users if isinstance(x, int)]
-        user_filter = filters.User(
-            username=usernames) | filters.User(user_id=user_ids)
+    print(whitelist_filter)
+    if whitelist_filter:
+        allowed_users = secrets_config.get_whitelist()
+        if len(allowed_users) > 0:
+            usernames = [
+                x for x in allowed_users if isinstance(x, str)]
+            user_ids = [
+                x for x in allowed_users if isinstance(x, int)]
+            user_filter = filters.User(
+                username=usernames) | filters.User(user_id=user_ids)
+    else:
+        blocked_users = secrets_config.get_blacklist()
+        if len(blocked_users) > 0:
+            usernames = [
+                x for x in blocked_users if isinstance(x, str)]
+            user_ids = [
+                x for x in blocked_users if isinstance(x, int)]
+            user_filter = ~(filters.User(
+                username=usernames) | filters.User(user_id=user_ids))
 
     application.add_handler(CommandHandler(
         "start", start_handle, filters=user_filter))
@@ -614,6 +653,9 @@ def run_bot() -> None:
     application.add_handler(CallbackQueryHandler(
         set_mode_handle, pattern="^orientation"))
 
+
+    application.add_handler(MessageHandler(
+        ~user_filter, restricted_user_handle))
     application.add_error_handler(error_handle)
 
     # start the bot
@@ -622,4 +664,4 @@ def run_bot() -> None:
 
 
 if __name__ == "__main__":
-    run_bot()
+    start_bot()

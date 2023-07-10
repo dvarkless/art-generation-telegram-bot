@@ -28,7 +28,7 @@ warning:
 
 error:
   bad_action: Эта фича еще не внедрена
-  whitelist: Ошибка. Тебя нет в белом списке
+  restricted_access: Ошибка. Ты не можешь пользоваться этим ботом
   bad_message: Этот тип сообщения не поддерживается
   generation_error: Ошибка при генерации изображения
   unhandled_error: Неизвесная ошибка

@@ -1,6 +1,9 @@
 available_generations: ["txt2img", "img2img", "rescale"]
 available_orientations: ["square", "portrait", "landscape"]
 
+bot_settings:
+  user_filter: whitelist # whitelist or blacklist
+
 bot_commands:
   model:
     command: /artist
