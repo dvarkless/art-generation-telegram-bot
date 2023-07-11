@@ -1,0 +1,8 @@
+change_generation_mode
+change_orientation_mode
+get_settings
+set_model
+start
+txt2img
+img2img
+rescale
