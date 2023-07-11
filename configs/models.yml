@@ -55,4 +55,27 @@ sample-model:
     creativity: 1
     skill: 5
 
-# Add other models here: (put their weights into ./stable-diffusion-webui/models/Stable-diffusion/your-model.safetensors)
+# Put other models here: (put their weights into ./stable-diffusion-webui/models/Stable-diffusion/your-model.safetensors)
+#
+# Available samplers:
+# Name [alias1, alias2, ...]
+# Euler a ['k_euler_a', 'k_euler_ancestral']
+# Euler ['k_euler']
+# LMS ['k_lms']
+# Heun ['k_heun']
+# DPM2 ['k_dpm_2']
+# DPM2 a ['k_dpm_2_a']
+# DPM++ 2S a ['k_dpmpp_2s_a']
+# DPM++ 2M ['k_dpmpp_2m']
+# DPM++ SDE ['k_dpmpp_sde']
+# DPM fast ['k_dpm_fast']
+# DPM adaptive ['k_dpm_ad']
+# LMS Karras ['k_lms_ka']
+# DPM2 Karras ['k_dpm_2_ka']
+# DPM2 a Karras ['k_dpm_2_a_ka']
+# DPM++ 2S a Karras ['k_dpmpp_2s_a_ka']
+# DPM++ 2M Karras ['k_dpmpp_2m_ka']
+# DPM++ SDE Karras ['k_dpmpp_sde_ka']
+# DDIM []
+# PLMS []
+# UniPC []
