@@ -10,10 +10,6 @@ Create AI Art using Telegram bot. Uses Stable Diffusion WebUI
 [Bot launch](#bot-launch) •
 
 </div>
-   
-## About The Project
-This program allows you to setup wallpapers from Wallpaper Engine using Command Line Interface.  
-There is also additional features like changing the accent color of your desktop to match the wallpaper. 
 
 Prompt languages: any.   
 Bot response languages available: English, Russian.
@@ -24,7 +20,7 @@ Bot response languages available: English, Russian.
 
 ## Installation
 ```
-git clone https://github.com/dvarkless/WPengine-cli/bl
+git clone https://github.com/dvarkless/art-generation-telegram-bot.git
 ```  
 #### Create venv and install libraries   
 Linux:   
